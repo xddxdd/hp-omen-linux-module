@@ -631,10 +631,15 @@ next:
 		break;
 	case HPWMI_BEZEL_BUTTON:
 	case HPWMI_OMEN_KEY:
+		// Some hotkey values reside in event_data.
 		key_code = hp_wmi_read_int(HPWMI_HOTKEY_QUERY);
+		if (!key_code)
+			key_code = event_data;
+
 		// Some hotkeys generate both press and release events
 		// Just drop the release events.
-		if (key_code < 0 || (key_code & HPWMI_HOTKEY_RELEASE_FLAG))
+		key_code = key_code & ~HPWMI_HOTKEY_RELEASE_FLAG;
+		if (key_code < 0)
 			break;
 
 		if (!sparse_keymap_report_event(hp_wmi_input_dev,
