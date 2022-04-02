@@ -22,6 +22,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/input.h>
+#include <linux/input-event-codes.h>
 #include <linux/input/sparse-keymap.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
@@ -74,7 +75,7 @@ struct bios_args {
 	u32 command;
 	u32 commandtype;
 	u32 datasize;
-	u8 data[128];
+	u8 data[4096];
 };
 
 enum hp_wmi_commandtype {
@@ -92,6 +93,9 @@ enum hp_wmi_commandtype {
 	HPWMI_POSTCODEERROR_QUERY	= 0x2a,
 	HPWMI_THERMAL_PROFILE_QUERY	= 0x4c,
 
+	HPWMI_MACRO_PROFILE_SET		= 15,
+	HPWMI_MACRO_MODE_SET		= 23,
+
 	HPWMI_FOURZONE_COLOR_GET	= 2,
 	HPWMI_FOURZONE_COLOR_SET	= 3,
 	HPWMI_FOURZONE_BRIGHT_GET	= 4,
@@ -104,6 +108,7 @@ enum hp_wmi_command {
 	HPWMI_READ	= 0x01,
 	HPWMI_WRITE	= 0x02,
 	HPWMI_ODM	= 0x03,
+	HPWMI_MACRO	= 131080,
 	HPWMI_FOURZONE	= 131081,
 };
 
@@ -256,14 +261,8 @@ static int hp_wmi_perform_query(int query, enum hp_wmi_command command,
 	struct bios_return *bios_return;
 	int actual_outsize;
 	union acpi_object *obj;
-	struct bios_args args = {
-		.signature = 0x55434553,
-		.command = command,
-		.commandtype = query,
-		.datasize = insize,
-		.data = { 0 },
-	};
-	struct acpi_buffer input = { sizeof(struct bios_args), &args };
+	struct bios_args *args = NULL;
+	struct acpi_buffer input = { sizeof(struct bios_args), args };
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
 	int ret = 0;
 
@@ -271,11 +270,19 @@ static int hp_wmi_perform_query(int query, enum hp_wmi_command command,
 	if (WARN_ON(mid < 0))
 		return mid;
 
-	if (WARN_ON(insize > sizeof(args.data)))
+	if (WARN_ON(insize > sizeof(args->data)))
 		return -EINVAL;
-	memcpy(&args.data[0], buffer, insize);
+
+	args = kzalloc(sizeof(struct bios_args), GFP_KERNEL);
+	args->signature = 0x55434553;
+	args->command = command;
+	args->commandtype = query;
+	args->datasize = insize;
+	memcpy(&args->data[0], buffer, insize);
+	input.pointer = args;
 
 	wmi_evaluate_method(HPWMI_BIOS_GUID, 0, mid, &input, &output);
+	kfree(args);
 
 	obj = output.pointer;
 
@@ -1246,6 +1253,77 @@ static int fourzone_setup(struct platform_device *dev)
 	return sysfs_create_group(&dev->dev.kobj, &zone_attribute_group);
 }
 
+/*
+ * (EXPERIMENTAL) Macro key support
+ */
+
+#define MACRO_KEY_RELEASE 0x80
+
+static u8 macro_profile_bytes[4096] = {
+	/* P1 */	0x03, KEY_KP1, KEY_KP1 | MACRO_KEY_RELEASE,
+	/* P2 */	0x03, KEY_KP2, KEY_KP2 | MACRO_KEY_RELEASE,
+	/* P3 */	0x03, KEY_KP3, KEY_KP3 | MACRO_KEY_RELEASE,
+	/* P4 */	0x03, KEY_KP4, KEY_KP4 | MACRO_KEY_RELEASE,
+	/* P5 */	0x03, KEY_KP5, KEY_KP5 | MACRO_KEY_RELEASE,
+	/* P6 */	0x03, KEY_KP6, KEY_KP6 | MACRO_KEY_RELEASE,
+
+	/* Ctrl+P1 */	0x05, KEY_LEFTCTRL, KEY_KP1, KEY_KP1 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+	/* Ctrl+P2 */	0x05, KEY_LEFTCTRL, KEY_KP2, KEY_KP2 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+	/* Ctrl+P3 */	0x05, KEY_LEFTCTRL, KEY_KP3, KEY_KP3 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+	/* Ctrl+P4 */	0x05, KEY_LEFTCTRL, KEY_KP4, KEY_KP4 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+	/* Ctrl+P5 */	0x05, KEY_LEFTCTRL, KEY_KP5, KEY_KP5 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+	/* Ctrl+P6 */	0x05, KEY_LEFTCTRL, KEY_KP6, KEY_KP6 | MACRO_KEY_RELEASE, KEY_LEFTCTRL | MACRO_KEY_RELEASE,
+
+	/* Alt+P1 */	0x05, KEY_LEFTALT, KEY_KP1, KEY_KP1 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+	/* Alt+P2 */	0x05, KEY_LEFTALT, KEY_KP2, KEY_KP2 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+	/* Alt+P3 */	0x05, KEY_LEFTALT, KEY_KP3, KEY_KP3 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+	/* Alt+P4 */	0x05, KEY_LEFTALT, KEY_KP4, KEY_KP4 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+	/* Alt+P5 */	0x05, KEY_LEFTALT, KEY_KP5, KEY_KP5 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+	/* Alt+P6 */	0x05, KEY_LEFTALT, KEY_KP6, KEY_KP6 | MACRO_KEY_RELEASE, KEY_LEFTALT | MACRO_KEY_RELEASE,
+
+	/* Shift+P1 */	0x05, KEY_LEFTSHIFT, KEY_KP1, KEY_KP1 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+	/* Shift+P2 */	0x05, KEY_LEFTSHIFT, KEY_KP2, KEY_KP2 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+	/* Shift+P3 */	0x05, KEY_LEFTSHIFT, KEY_KP3, KEY_KP3 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+	/* Shift+P4 */	0x05, KEY_LEFTSHIFT, KEY_KP4, KEY_KP4 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+	/* Shift+P5 */	0x05, KEY_LEFTSHIFT, KEY_KP5, KEY_KP5 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+	/* Shift+P6 */	0x05, KEY_LEFTSHIFT, KEY_KP6, KEY_KP6 | MACRO_KEY_RELEASE, KEY_LEFTSHIFT | MACRO_KEY_RELEASE,
+
+	/* Fn+P1 */	0x03, KEY_KP7, KEY_KP7 | MACRO_KEY_RELEASE,
+	/* Fn+P2 */	0x03, KEY_KP8, KEY_KP8 | MACRO_KEY_RELEASE,
+	/* Fn+P3 */	0x03, KEY_KP9, KEY_KP9 | MACRO_KEY_RELEASE,
+	/* Fn+P4 */	0x03, KEY_KP0, KEY_KP0 | MACRO_KEY_RELEASE,
+	/* Fn+P5 */	0x03, KEY_KPMINUS, KEY_KPMINUS | MACRO_KEY_RELEASE,
+	/* Fn+P6 */	0x03, KEY_KPPLUS, KEY_KPPLUS | MACRO_KEY_RELEASE,
+};
+
+static int macro_key_setup(struct platform_device *dev)
+{
+	int ret;
+	u32 macro_enable = 1;
+
+	ret = hp_wmi_perform_query(HPWMI_MACRO_PROFILE_SET, HPWMI_MACRO,
+				   macro_profile_bytes, sizeof(macro_profile_bytes), 0);
+	pr_debug("macro key setup ret 0x%x\n", ret);
+
+	ret = hp_wmi_perform_query(HPWMI_MACRO_MODE_SET, HPWMI_MACRO,
+				   &macro_enable, sizeof(macro_enable), 0);
+	pr_debug("macro key enable ret 0x%x\n", ret);
+
+	return 0;
+}
+
+static int macro_key_remove(struct platform_device *dev)
+{
+	int ret;
+	u32 macro_disable = 0;
+
+	ret = hp_wmi_perform_query(HPWMI_MACRO_MODE_SET, HPWMI_MACRO,
+				   &macro_disable, sizeof(macro_disable), 0);
+	pr_debug("macro key disable ret 0x%x\n", ret);
+
+	return 0;
+}
+
 static int __init hp_wmi_bios_setup(struct platform_device *device)
 {
 	/* clear detected rfkill devices */
@@ -1258,6 +1336,8 @@ static int __init hp_wmi_bios_setup(struct platform_device *device)
 		hp_wmi_rfkill2_setup(device);
 
 	fourzone_setup(device);
+
+	macro_key_setup(device);
 
 	thermal_profile_setup();
 
@@ -1288,6 +1368,8 @@ static int __exit hp_wmi_bios_remove(struct platform_device *device)
 
 	if (platform_profile_support)
 		platform_profile_remove();
+
+	macro_key_remove(device);
 
 	return 0;
 }

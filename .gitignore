@@ -10,3 +10,4 @@ Module.symvers
 omen_cs/*
 app
 iasl
+src/.*
